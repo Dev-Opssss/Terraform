@@ -26,7 +26,7 @@ resource "aws_subnet" "HCL_subnet1" {
     cidr_block = "192.168.1.0/24"
     vpc_id ="${aws_vpc.vpc.id}"
      tags = {
-        Name = "hcl_SG"
+        Name = "hcl_subnet1"
         owner = "Narendra"
         env = "Prod"
     }
