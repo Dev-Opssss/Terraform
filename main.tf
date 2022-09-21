@@ -1,35 +1,159 @@
+#https://www.terraform.io/docs/configuration-0-11/resources.html#explicit-dependencies
+
 provider "aws" {
-    region = "ap-south-1"
-  
+    region = "${var.aws_region}"
 }
-resource "aws_vpc" "vpc" {
-    cidr_block = "192.168.0.0/16"
+
+locals {
+  env  = "Prod"
+  owner = "Sree"
+  costcenter = 9000
+}
+
+
+resource "aws_vpc" "default" {
+    cidr_block = "${var.vpc_cidr}"
     enable_dns_hostnames = true
     tags = {
-        Name = "hcl_vpc"
-        owner = "Narendra"
-        env = "Prod"
+        Name = "${var.vpc_name}"
+        Env = "${local.env}"
+        Owner = "${local.owner}"
+        CC = "${local.costcenter}"
     }
-  
-}
-resource "aws_security_group" "HCl-SG" {
-    vpc_id ="${aws_vpc.vpc.id}"
-     tags = {
-        Name = "hcl_SG"
-        owner = "Narendra"
-        env = "Prod"
-    }
-  
+    depends_on = ["aws_s3_bucket.example"] #Explicit dependency
 }
 
-resource "aws_subnet" "HCL_subnet1" {
-    cidr_block = "192.168.1.0/24"
-    vpc_id ="${aws_vpc.vpc.id}"
-     tags = {
-        Name = "hcl_subnet1"
-        owner = "Narendra"
-        env = "Prod"
+resource "aws_internet_gateway" "default" {
+    vpc_id = "${aws_vpc.default.id}"
+	tags = {
+        Name = "${var.IGW_name}"
+        Env = "${local.env}"
+        Owner = "${local.owner}"
+        CC = "${local.costcenter}"
+    }
+    depends_on = ["aws_s3_bucket.example"] #Explicit dependency
+}
+
+resource "aws_subnet" "subnets" {
+    #count = "${length(var.cidrs)}"
+    count = "${var.env!="prod" ? 1 : 3}"
+    vpc_id = "${aws_vpc.default.id}" #Implicit dependency
+    cidr_block = "${element(var.cidrs, count.index)}"
+    availability_zone = "${element(var.azs, count.index)}"
+    map_public_ip_on_launch = true
+
+    tags = {
+        Name = "${var.vpc_name}-Subnet-${count.index+1}"
+        Env = "${local.env}"
+        Owner = "${local.owner}"
+        CC = "${local.costcenter}"
+    }
+}
+
+
+resource "aws_route_table" "terraform-public" {
+    vpc_id = "${aws_vpc.default.id}"
+
+    route {
+        cidr_block = "0.0.0.0/0"
+        gateway_id = "${aws_internet_gateway.default.id}"
     }
 
-  
+    tags = {
+        Name = "${var.Main_Routing_Table}"
+        
+    }
 }
+
+resource "aws_route_table_association" "terraform-public" {
+    #count = "${length(var.cidrs)}"
+    count = "${var.env!="prod" ? 1 : 6}"
+    subnet_id = "${element(aws_subnet.subnets.*.id,count.index)}"
+    #aws_subnet.subnets.0.id
+    #aws_subnet.subnets.1.id
+    #aws_subnet.subnets.2.id
+    route_table_id = "${aws_route_table.terraform-public.id}"
+}
+
+resource "aws_security_group" "allow_all" {
+  name        = "allow_all"
+  description = "Allow all inbound traffic"
+  vpc_id      = "${aws_vpc.default.id}"
+
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    cidr_blocks     = ["0.0.0.0/0"]
+    }
+}
+
+resource "aws_s3_bucket" "example" {
+  bucket = "sreedevopsclassterraform200"
+  tags = {
+    Time = "8PM"
+  }
+
+  lifecycle {
+   create_before_destroy = true
+   ignore_changes = [
+       tags["Time"]
+       ]
+}
+}
+data "aws_ami" "my_ami" {
+      most_recent      = true
+      #name_regex       = "^mavrick"
+      owners           = ["311737008483"]
+#
+
+
+resource "aws_instance" "web-1" {
+    ami = "${data.aws_ami.my_ami.id}"
+    #count = 1
+    #ami = "${lookup(var.amis, "us-east-1")}"
+    instance_type = "t2.micro"
+    key_name = "${var.key_name}"
+    subnet_id = "${aws_subnet.subnets.0.id}"
+    vpc_security_group_ids = ["${aws_security_group.allow_all.id}"]
+    associate_public_ip_address = true	
+    tags = {
+        Name = "${var.vpc_name}-Server-1"
+        Env = "Prod"
+        Owner = "Sree"
+    }
+}
+
+resource "null_resource" "nginxinstall" {
+
+    provisioner "remote-exec" {
+    inline = [
+      #"chmod +x /tmp/script.sh",
+      #"sudo ./tmp/script.sh",
+      "sudo yum update -y",
+      "sudo yum install nginx -y",
+      "sudo service nginx start"
+
+      ]
+    connection {
+    type     = "ssh"
+    user     = "ec2-user"
+    #password = "India@123456"
+    private_key = "${file("LaptopKey.pem")}"
+    host     = "${aws_instance.web-1.public_ip}"
+    }
+    }
+
+}
+}
+
+#output "ami_id" {
+#  value = "${data.aws_ami.my_ami.id}"
+#}
